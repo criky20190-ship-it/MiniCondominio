@@ -44,47 +44,37 @@ router.post('/', authMiddleware, async (req: AuthRequest, res: Response, next: N
     
     const db = await getDatabase();
     
-    // Start transaction
-    await db.exec('BEGIN TRANSACTION');
+    const result = await db.run(
+      `INSERT INTO spese (palazzina_id, descrizione, importo, data_spesa, categoria, documento_url, note, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [palazzina_id, descrizione, importo, data_spesa, categoria || null, documento_url || null, note || null, req.userId]
+    );
     
-    try {
-      const result = await db.run(
-        `INSERT INTO spese (palazzina_id, descrizione, importo, data_spesa, categoria, documento_url, note, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [palazzina_id, descrizione, importo, data_spesa, categoria || null, documento_url || null, note || null, req.userId]
+    // Create pagamenti entries for each appartamento
+    const appartamenti = await db.all(
+      'SELECT id, quota_millesimi FROM appartamenti WHERE palazzina_id = ?',
+      [palazzina_id]
+    );
+    
+    // Calculate total millesimi
+    const totalMillesimi = appartamenti.reduce((sum: number, a: any) => sum + (a.quota_millesimi || 0), 0);
+    
+    for (const app of appartamenti) {
+      const quota = totalMillesimi > 0 ? (app.quota_millesimi / totalMillesimi) : 0;
+      const importoQuota = importo * quota;
+      
+      await db.run(
+        `INSERT INTO pagamenti_spese (spesa_id, appartamento_id, importo, stato)
+         VALUES (?, ?, ?, 'pendente')`,
+        [result.lastID, app.id, importoQuota]
       );
-      
-      // Create pagamenti entries for each appartamento
-      const appartamenti = await db.all(
-        'SELECT id, quota_millesimi FROM appartamenti WHERE palazzina_id = ?',
-        [palazzina_id]
-      );
-      
-      // Calculate total millesimi
-      const totalMillesimi = appartamenti.reduce((sum: number, a: any) => sum + (a.quota_millesimi || 0), 0);
-      
-      for (const app of appartamenti) {
-        const quota = totalMillesimi > 0 ? (app.quota_millesimi / totalMillesimi) : 0;
-        const importoQuota = importo * quota;
-        
-        await db.run(
-          `INSERT INTO pagamenti_spese (spesa_id, appartamento_id, importo, stato)
-           VALUES (?, ?, ?, 'pendente')`,
-          [result.lastID, app.id, importoQuota]
-        );
-      }
-      
-      await db.exec('COMMIT');
-      
-      const spesa = await db.get('SELECT * FROM spese WHERE id = ?', [result.lastID]);
-      const pagamenti = await db.all('SELECT * FROM pagamenti_spese WHERE spesa_id = ?', [result.lastID]);
-      spesa.pagamenti = pagamenti;
-      
-      res.status(201).json(spesa);
-    } catch (error) {
-      await db.exec('ROLLBACK');
-      throw error;
     }
+    
+    const spesa = await db.get('SELECT * FROM spese WHERE id = ?', [result.lastID]);
+    const pagamenti = await db.all('SELECT * FROM pagamenti_spese WHERE spesa_id = ?', [result.lastID]);
+    spesa.pagamenti = pagamenti;
+    
+    res.status(201).json(spesa);
   } catch (error) {
     next(error);
   }
