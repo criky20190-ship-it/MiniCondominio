@@ -15,7 +15,7 @@ router.get('/', authMiddleware, async (req: AuthRequest, res: Response, next: Ne
     const db = await getDatabase();
     
     const palazzine = await db.all(`
-      SELECT p.* FROM palazzine p
+      SELECT DISTINCT p.* FROM palazzine p
       LEFT JOIN utenti_palazzine up ON p.id = up.palazzina_id
       WHERE p.admin_id = ? OR up.user_id = ?
       ORDER BY p.created_at DESC
